@@ -3,6 +3,7 @@ import re
 import json
 import time
 import logging
+import asyncio
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -10,6 +11,8 @@ from telegram import (
     Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InputMediaPhoto,
+    InputMediaVideo,
 )
 from telegram.ext import (
     Application,
@@ -64,7 +67,6 @@ TOPIC_LABELS_UZ = {
 }
 
 # ============ KEYWORDS -> TOPIC ============
-# Siz xohlasangiz keyin admin paneldan o‘zgartirasiz
 DEFAULT_KEYWORDS: Dict[str, List[str]] = {
     "uy": ["ijara", "kvartira", "uy", "xonadon", "room", "arenda", "ijaraga", "mehmanxona"],
     "ish": ["ish", "vakansiya", "vakans", "job", "работа", "xodim", "ishchi", "maosh", "o‘rin", "o'rin"],
@@ -95,11 +97,9 @@ def load_state():
                 STATE = json.load(f) or {}
         except Exception:
             STATE = {}
-    # merge defaults
     for k, v in DEFAULT_STATE.items():
         if k not in STATE:
             STATE[k] = v
-    # ensure keys exist
     if "keywords" not in STATE or not isinstance(STATE["keywords"], dict):
         STATE["keywords"] = DEFAULT_KEYWORDS
     if "mode" not in STATE:
@@ -123,17 +123,13 @@ def clean_text_for_match(text: str) -> str:
     return text
 
 def guess_topic_key(text: str) -> str:
-    """keywords bo‘yicha topic topadi, topmasa default_topic"""
     t = clean_text_for_match(text)
     kw = STATE.get("keywords", DEFAULT_KEYWORDS)
-
-    # kuchliroq match uchun: uzun keywordlar oldin tekshirilsin
     for topic_key, words in kw.items():
         for w in sorted(words, key=len, reverse=True):
             w2 = clean_text_for_match(w)
             if w2 and w2 in t:
                 return topic_key
-
     return STATE.get("default_topic", "umumiy")
 
 def topic_thread_id(topic_key: str) -> int:
@@ -144,7 +140,6 @@ def admin_panel_kb() -> InlineKeyboardMarkup:
     mode_label = "✅ AUTO" if mode == "auto" else "🖐 MANUAL"
     default_key = STATE.get("default_topic", "umumiy")
     default_label = TOPIC_LABELS_UZ.get(default_key, default_key)
-
     kb = [
         [InlineKeyboardButton(f"Rejim: {mode_label}", callback_data="adm:toggle_mode")],
         [InlineKeyboardButton(f"Default: {default_label}", callback_data="adm:set_default")],
@@ -153,105 +148,103 @@ def admin_panel_kb() -> InlineKeyboardMarkup:
     ]
     return InlineKeyboardMarkup(kb)
 
-def choose_topic_kb(prefix: str = "pick") -> InlineKeyboardMarkup:
-    # 8 ta tugma + umumiy + elon (hammasi)
-    order = ["umumiy", "uy", "ish", "taksi", "visa", "bozor", "ziyorat", "salomatlik", "elon"]
-    rows = []
-    row = []
-    for k in order:
-        row.append(InlineKeyboardButton(TOPIC_LABELS_UZ[k], callback_data=f"{prefix}:{k}"))
-        if len(row) == 2:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-    rows.append([InlineKeyboardButton("⬅️ Orqaga", callback_data="adm:back")])
-    return InlineKeyboardMarkup(rows)
-
-# ============ MEDIA SENDER ============
+# ============ MEDIA SENDER (single message) ============
 async def send_to_group_with_media(bot, dest_chat_id: int, thread_id: int, msg):
     kwargs = {"message_thread_id": thread_id} if thread_id else {}
-
     caption = (msg.caption or msg.text or "")
     caption = caption[:1024] if caption else None
     entities = msg.caption_entities or msg.entities
 
-    # PHOTO
     if msg.photo:
         file_id = msg.photo[-1].file_id
-        await bot.send_photo(
-            chat_id=dest_chat_id,
-            photo=file_id,
-            caption=caption,
-            caption_entities=entities,
-            **kwargs
-        )
+        await bot.send_photo(dest_chat_id, file_id, caption=caption, caption_entities=entities, **kwargs)
         return
-
-    # VIDEO
     if msg.video:
-        await bot.send_video(
-            chat_id=dest_chat_id,
-            video=msg.video.file_id,
-            caption=caption,
-            caption_entities=entities,
-            supports_streaming=True,
-            **kwargs
-        )
+        await bot.send_video(dest_chat_id, msg.video.file_id, caption=caption, caption_entities=entities, supports_streaming=True, **kwargs)
         return
-
-    # ANIMATION (gif)
     if msg.animation:
-        await bot.send_animation(
-            chat_id=dest_chat_id,
-            animation=msg.animation.file_id,
-            caption=caption,
-            caption_entities=entities,
-            **kwargs
-        )
+        await bot.send_animation(dest_chat_id, msg.animation.file_id, caption=caption, caption_entities=entities, **kwargs)
         return
-
-    # DOCUMENT
     if msg.document:
-        await bot.send_document(
-            chat_id=dest_chat_id,
-            document=msg.document.file_id,
-            caption=caption,
-            caption_entities=entities,
-            **kwargs
-        )
+        await bot.send_document(dest_chat_id, msg.document.file_id, caption=caption, caption_entities=entities, **kwargs)
         return
-
-    # VOICE
     if msg.voice:
-        await bot.send_voice(
-            chat_id=dest_chat_id,
-            voice=msg.voice.file_id,
-            caption=caption,
-            caption_entities=entities,
-            **kwargs
-        )
+        await bot.send_voice(dest_chat_id, msg.voice.file_id, caption=caption, caption_entities=entities, **kwargs)
         return
-
-    # AUDIO
     if msg.audio:
-        await bot.send_audio(
-            chat_id=dest_chat_id,
-            audio=msg.audio.file_id,
-            caption=caption,
-            caption_entities=entities,
-            **kwargs
-        )
+        await bot.send_audio(dest_chat_id, msg.audio.file_id, caption=caption, caption_entities=entities, **kwargs)
         return
 
-    # TEXT fallback
     text = (msg.text or msg.caption or "").strip()
     if text:
-        await bot.send_message(chat_id=dest_chat_id, text=text[:4096], entities=msg.entities, **kwargs)
+        await bot.send_message(dest_chat_id, text[:4096], entities=msg.entities, **kwargs)
+
+# ============ ALBUM (media_group) BUFFER ============
+ALBUMS: Dict[str, Dict] = {}  # key -> {"msgs":[...], "task": asyncio.Task, "chat_id": int}
+
+def album_key(msg) -> Optional[str]:
+    mgid = getattr(msg, "media_group_id", None)
+    if not mgid:
+        return None
+    return f"{msg.chat_id}:{mgid}"
+
+def can_make_media_group(msgs) -> bool:
+    # Telegram media_group: faqat photo/video
+    for m in msgs:
+        if not (m.photo or m.video):
+            return False
+    return True
+
+async def flush_album(app: Application, key: str, delay_sec: float = 1.2):
+    await asyncio.sleep(delay_sec)
+    pack = ALBUMS.pop(key, None)
+    if not pack:
+        return
+    msgs = pack["msgs"]
+    msgs.sort(key=lambda x: x.message_id)
+
+    # caption/text: odatda birinchi caption ishlatiladi
+    first = msgs[0]
+    text = (first.caption or first.text or "").strip()
+    topic_key = guess_topic_key(text)
+    thread_id = topic_thread_id(topic_key)
+
+    if can_make_media_group(msgs):
+        media = []
+        # caption faqat 1 ta mediada bo‘lsin (birinchi)
+        cap = (first.caption or "").strip()
+        cap = cap[:1024] if cap else None
+        cap_entities = first.caption_entities
+
+        for i, m in enumerate(msgs):
+            if m.photo:
+                file_id = m.photo[-1].file_id
+                if i == 0 and cap:
+                    media.append(InputMediaPhoto(media=file_id, caption=cap, caption_entities=cap_entities))
+                else:
+                    media.append(InputMediaPhoto(media=file_id))
+            elif m.video:
+                file_id = m.video.file_id
+                if i == 0 and cap:
+                    media.append(InputMediaVideo(media=file_id, caption=cap, caption_entities=cap_entities, supports_streaming=True))
+                else:
+                    media.append(InputMediaVideo(media=file_id, supports_streaming=True))
+
+        kwargs = {"message_thread_id": thread_id} if thread_id else {}
+        try:
+            await app.bot.send_media_group(chat_id=DEST_CHAT_ID, media=media, **kwargs)
+            return
+        except Exception as e:
+            log.warning("send_media_group failed, fallback to singles: %s", e)
+
+    # fallback: alohida yuborish
+    for m in msgs:
+        await send_to_group_with_media(app.bot, DEST_CHAT_ID, thread_id, m)
 
 # ============ “MANUAL MODE” uchun pending ============
-# channel_msg_id -> data
-PENDING: Dict[int, Dict] = {}async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+PENDING: Dict[int, Dict] = {}  # channel_msg_id -> data
+
+async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not update.message:
         return
     txt = (
@@ -287,7 +280,16 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "adm:set_default":
         await q.answer("OK")
-        await q.edit_message_text("Default bo‘limni tanlang:", reply_markup=choose_topic_kb(prefix="def"))
+        # soddaroq tanlash
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🧩 Umumiy", callback_data="def:umumiy"), InlineKeyboardButton("🏠 Uy", callback_data="def:uy")],
+            [InlineKeyboardButton("💼 Ish", callback_data="def:ish"), InlineKeyboardButton("🚖 Taksi", callback_data="def:taksi")],
+            [InlineKeyboardButton("🛂 Visa", callback_data="def:visa"), InlineKeyboardButton("🛒 Bozor", callback_data="def:bozor")],
+            [InlineKeyboardButton("🕌 Ziyorat", callback_data="def:ziyorat"), InlineKeyboardButton("🩺 Salomatlik", callback_data="def:salomatlik")],
+            [InlineKeyboardButton("📣 E’lon", callback_data="def:elon")],
+            [InlineKeyboardButton("⬅️ Orqaga", callback_data="adm:back")],
+        ])
+        await q.edit_message_text("Default bo‘limni tanlang:", reply_markup=kb)
         return
 
     if data.startswith("def:"):
@@ -326,7 +328,6 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Manual post tanlash: pick:<channel_msg_id>:<topic_key>
     if data.startswith("pick:"):
-        # pick:<msgid>:<topic>
         parts = data.split(":")
         if len(parts) != 3:
             await q.answer("Xato", show_alert=True)
@@ -353,6 +354,7 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def on_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Source kanal postlarini ushlaydi va guruhga bo‘limlab yuboradi.
+    Album bo‘lsa: 1 ta media_group qilib yuboradi.
     """
     msg = update.channel_post
     if not msg:
@@ -360,24 +362,30 @@ async def on_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if msg.chat_id != SOURCE_CHAT_ID:
         return
 
-    # Post matni/caption
-    text = (msg.text or msg.caption or "").strip()
+    # ===== album buffer =====
+    key = album_key(msg)
+    if key:
+        pack = ALBUMS.get(key)
+        if not pack:
+            ALBUMS[key] = {"msgs": [msg]}
+            # album yig‘ilib bo‘lishi uchun 1.2s kutamiz
+            ALBUMS[key]["task"] = asyncio.create_task(flush_album(context.application, key))
+        else:
+            pack["msgs"].append(msg)
+        return
 
+    # ===== oddiy post =====
+    text = (msg.text or msg.caption or "").strip()
     mode = STATE.get("mode", "auto")
 
     if mode == "manual":
-        # Adminlardan birinchisiga DM qilib “qaysi bo‘lim?” so‘raymiz
         if not ADMIN_IDS:
             log.warning("MANUAL rejim: ADMIN_IDS yo‘q, auto fallback.")
             mode = "auto"
         else:
             PENDING[msg.message_id] = {"msg": msg, "ts": time.time()}
-            # admin DMga preview + tugmalar
             preview = "📥 Yangi post keldi. Qaysi bo‘limga yuboray?\n\n"
-            if text:
-                preview += (text[:500] + ("…" if len(text) > 500 else ""))
-            else:
-                preview += "(Matn yo‘q, media post)"
+            preview += (text[:500] + ("…" if len(text) > 500 else "")) if text else "(Matn yo‘q, media post)"
 
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🧩 Umumiy", callback_data=f"pick:{msg.message_id}:umumiy"),
@@ -402,13 +410,6 @@ async def on_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
         thread_id = topic_thread_id(topic_key)
         await send_to_group_with_media(context.bot, DEST_CHAT_ID, thread_id, msg)
 
-async def on_group_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Ixtiyoriy: Guruhda kimdir yozsa — o‘chirish/ boshqa logic kerak bo‘lsa shu yer.
-    Hozircha tegmaymiz.
-    """
-    return
-
 def main():
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN yo‘q. Railway Variables’ga BOT_TOKEN qo‘ying.")
@@ -425,9 +426,6 @@ def main():
 
     # source channel postlari
     app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST, on_channel_post))
-
-    # (ixtiyoriy) guruhdagi text handler (hozir ishlatilmaydi)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_group_text))
 
     log.info("✅ Channel-to-group bot ishga tushdi. Mode=%s | Default=%s", STATE.get("mode"), STATE.get("default_topic"))
     app.run_polling(drop_pending_updates=True)
