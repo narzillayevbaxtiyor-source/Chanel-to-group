@@ -55,7 +55,7 @@ TOPICS = {
 }
 
 TOPIC_LABELS_UZ = {
-    "umumiy": "🧩 Umumiy",
+    "umumiy": "💬 Umumiy",
     "uy": "🏠 Uy",
     "ish": "💼 Ish",
     "taksi": "🚖 Taksi",
@@ -67,25 +67,38 @@ TOPIC_LABELS_UZ = {
 }
 
 # ============ KEYWORDS -> TOPIC ============
-# MUHIM: "taksi" ichidagi juda umumiy so'zlarni olib tashladim (olib/borib/ketish/narx/transport...)
 DEFAULT_KEYWORDS: Dict[str, List[str]] = {
     "uy": [
-        "ijara", "kvartira", "xonadon", "room", "arenda", "ijaraga",
-        "mehmonxona", "mehmanxona", "hostel", "otel", "hotel",
-        "kunlik", "haftalik", "oylik", "xona", "xonalik"
+        "hostel", "mehmonxona", "otel", "hotel", "kvartira", "ijara", "arenda", "xonadon",
+        "xona", "room", "bedspace", "yotoqxona", "kunlik", "haftalik", "oylik", "piyoda", "km"
     ],
-    "ish": ["vakansiya", "vakans", "job", "работа", "xodim", "ishchi", "maosh", "rezume", "cv", "ish o'rni", "ish o‘rni"],
+    "ish": [
+        "ish", "vakansiya", "vakans", "job", "работа", "xodim", "ishchi", "maosh",
+        "o‘rin", "o'rin", "driver", "haydovchi", "oshpaz", "ustoz", "usta", "sotuvchi"
+    ],
     "taksi": [
-        "taksi", "taxi", "careem", "uber", "bolt",
-        "aeroport", "airport", "transfer",
-        "mashjid nabaviy", "haram", "uhud",
-        "yo'l haqi", "tarif", "dostavka"
+        "taksi", "taxi", "careem", "uber", "transport", "mashina", "olib", "borib",
+        "ketish", "narx", "airport", "aeroport", "zamzam", "haramga", "nabaviyga"
     ],
-    "visa": ["visa", "viza", "iqoma", "muqim", "muqima", "hujjat", "passport", "pasport", "jawazat", "absher"],
-    "bozor": ["sotiladi", "olaman", "olamiz", "bozor", "savdo", "магазин", "куплю", "продам", "narxi", "nechpul", "qancha"],
-    "ziyorat": ["umra", "ziyorat", "miqot", "ehrom", "ihram", "talbiya", "duo", "makk", "madin", "haram", "nabaviy", "uhud", "ziyorat joylari"],
-    "salomatlik": ["doktor", "shifokor", "kasal", "dori", "apteka", "allergiya", "tish", "yo‘tal", "yotal", "og‘riq", "og'riq", "klinika", "hospital"],
-    "elon": ["e'lon", "elon", "announcement", "diqqat", "важно", "ogohlantirish"],
+    "visa": [
+        "visa", "viza", "iqoma", "muqim", "muqima", "hujjat", "passport", "pasport",
+        "yurist", "jarima", "muddat", "chiqish", "kiritish", "exit", "entry"
+    ],
+    "bozor": [
+        "sotiladi", "sotaman", "olaman", "olamiz", "bozor", "narx", "arzon", "savdo",
+        "магазин", "куплю", "продам", "buy", "sell", "chegirma", "narxi", "bozori"
+    ],
+    "ziyorat": [
+        "umra", "ziyorat", "maqom", "miqot", "ehrom", "ihram", "talbiya", "duo",
+        "makka", "makk", "madina", "madin", "haram", "nabaviy", "uhud", "baqi", "quba"
+    ],
+    "salomatlik": [
+        "doktor", "shifokor", "kasal", "og‘riq", "og'riq", "dori", "apteka", "allergiya",
+        "tish", "yo‘tal", "yotal", "harorat", "bosim", "tez yordam", "klinika"
+    ],
+    "elon": [
+        "e'lon", "elon", "announcement", "diqqat", "важно", "ogohlantirish", "ogohlantiramiz"
+    ],
 }
 
 STATE_FILE = "state.json"
@@ -94,6 +107,7 @@ DEFAULT_STATE = {
     "mode": "auto",              # auto | manual
     "default_topic": "umumiy",    # fallback
     "keywords": DEFAULT_KEYWORDS,
+    "last_seen_channel_msg_id": 0,
 }
 
 STATE = {}
@@ -131,53 +145,14 @@ def clean_text_for_match(text: str) -> str:
     text = re.sub(r"\s+", " ", text)
     return text
 
-# ========= FIX: ball (score) tizimi =========
-def score_topic(text: str, words: List[str]) -> int:
-    """
-    Qanchalik ko'p mos kelsa shunchalik yuqori ball.
-    - uzun so'zlar ko'proq ball beradi
-    - word boundary ishlatamiz (iloji boricha)
-    """
-    t = clean_text_for_match(text)
-    score = 0
-    for w in words:
-        w2 = clean_text_for_match(w).strip()
-        if not w2:
-            continue
-
-        # "madin" kabi qisqa bo'laklar ko'p joyda chiqmasin -> boundaryga harakat
-        # agar so'zda bo'sh joy bo'lsa -> oddiy substring
-        if " " in w2:
-            if w2 in t:
-                score += 3 + min(len(w2) // 6, 3)
-        else:
-            # boundary: \b w \b
-            pattern = r"(?<!\w)" + re.escape(w2) + r"(?!\w)"
-            if re.search(pattern, t):
-                score += 2 + min(len(w2) // 5, 3)
-    return score
-
 def guess_topic_key(text: str) -> str:
     t = clean_text_for_match(text)
     kw = STATE.get("keywords", DEFAULT_KEYWORDS)
-
-    best_key = None
-    best_score = 0
-
-    # priority: elon > uy > ish > visa > taksi > bozor > ziyorat > salomatlik > umumiy
-    # (xohlasangiz o'zgartiramiz)
-    priority = ["elon", "uy", "ish", "visa", "taksi", "bozor", "ziyorat", "salomatlik", "umumiy"]
-
-    for topic_key in priority:
-        words = kw.get(topic_key, [])
-        s = score_topic(t, words)
-        if s > best_score:
-            best_score = s
-            best_key = topic_key
-
-    if best_key and best_score > 0:
-        return best_key
-
+    for topic_key, words in kw.items():
+        for w in sorted(words, key=len, reverse=True):
+            w2 = clean_text_for_match(w)
+            if w2 and w2 in t:
+                return topic_key
     return STATE.get("default_topic", "umumiy")
 
 def topic_thread_id(topic_key: str) -> int:
@@ -196,88 +171,191 @@ def admin_panel_kb() -> InlineKeyboardMarkup:
     ]
     return InlineKeyboardMarkup(kb)
 
-# ============ SAFE SEND (thread not found -> fallback) ============
-async def safe_send_message(bot, chat_id: int, thread_id: Optional[int], text: str, entities=None):
-    kwargs = {"message_thread_id": thread_id} if thread_id else {}
+# ============ SAFE SENDERS (thread not found -> send WITHOUT thread) ============
+def _thread_kwargs(thread_id: Optional[int]) -> dict:
+    return {"message_thread_id": thread_id} if thread_id else {}
+
+def _is_thread_not_found(e: Exception) -> bool:
+    s = str(e)
+    return "Message thread not found" in s or "message thread not found" in s
+
+async def safe_send_message(bot, chat_id: int, text: str, thread_id: Optional[int] = None, entities=None):
     try:
-        return await bot.send_message(chat_id, text, entities=entities, **kwargs)
+        return await bot.send_message(chat_id=chat_id, text=text, entities=entities, **_thread_kwargs(thread_id))
     except BadRequest as e:
-        if "Message thread not found" in str(e):
-            log.warning("Thread not found (%s). Fallback to umumiy.", thread_id)
-            return await bot.send_message(chat_id, text, entities=entities, message_thread_id=TOPICS["umumiy"])
+        if _is_thread_not_found(e):
+            log.warning("Thread not found (%s). Sending message without thread.", thread_id)
+            return await bot.send_message(chat_id=chat_id, text=text, entities=entities)
         raise
 
-async def safe_send_photo(bot, chat_id: int, thread_id: Optional[int], file_id: str, caption=None, caption_entities=None):
-    kwargs = {"message_thread_id": thread_id} if thread_id else {}
+async def safe_send_photo(bot, chat_id: int, file_id: str, thread_id: Optional[int] = None, caption=None, caption_entities=None):
     try:
-        return await bot.send_photo(chat_id, file_id, caption=caption, caption_entities=caption_entities, **kwargs)
+        return await bot.send_photo(chat_id=chat_id, photo=file_id, caption=caption, caption_entities=caption_entities, **_thread_kwargs(thread_id))
     except BadRequest as e:
-        if "Message thread not found" in str(e):
-            log.warning("Thread not found (%s). Fallback to umumiy.", thread_id)
-            return await bot.send_photo(chat_id, file_id, caption=caption, caption_entities=caption_entities, message_thread_id=TOPICS["umumiy"])
+        if _is_thread_not_found(e):
+            log.warning("Thread not found (%s). Sending photo without thread.", thread_id)
+            return await bot.send_photo(chat_id=chat_id, photo=file_id, caption=caption, caption_entities=caption_entities)
         raise
 
-async def safe_send_video(bot, chat_id: int, thread_id: Optional[int], file_id: str, caption=None, caption_entities=None):
-    kwargs = {"message_thread_id": thread_id} if thread_id else {}
+async def safe_send_video(bot, chat_id: int, file_id: str, thread_id: Optional[int] = None, caption=None, caption_entities=None):
     try:
-        return await bot.send_video(chat_id, file_id, caption=caption, caption_entities=caption_entities, supports_streaming=True, **kwargs)
+        return await bot.send_video(chat_id=chat_id, video=file_id, caption=caption, caption_entities=caption_entities, supports_streaming=True, **_thread_kwargs(thread_id))
     except BadRequest as e:
-        if "Message thread not found" in str(e):
-            log.warning("Thread not found (%s). Fallback to umumiy.", thread_id)
-            return await bot.send_video(chat_id, file_id, caption=caption, caption_entities=caption_entities, supports_streaming=True, message_thread_id=TOPICS["umumiy"])
+        if _is_thread_not_found(e):
+            log.warning("Thread not found (%s). Sending video without thread.", thread_id)
+            return await bot.send_video(chat_id=chat_id, video=file_id, caption=caption, caption_entities=caption_entities, supports_streaming=True)
         raise
 
-async def safe_send_document(bot, chat_id: int, thread_id: Optional[int], file_id: str, caption=None, caption_entities=None):
-    kwargs = {"message_thread_id": thread_id} if thread_id else {}
+async def safe_send_animation(bot, chat_id: int, file_id: str, thread_id: Optional[int] = None, caption=None, caption_entities=None):
     try:
-        return await bot.send_document(chat_id, file_id, caption=caption, caption_entities=caption_entities, **kwargs)
+        return await bot.send_animation(chat_id=chat_id, animation=file_id, caption=caption, caption_entities=caption_entities, **_thread_kwargs(thread_id))
     except BadRequest as e:
-        if "Message thread not found" in str(e):
-            log.warning("Thread not found (%s). Fallback to umumiy.", thread_id)
-            return await bot.send_document(chat_id, file_id, caption=caption, caption_entities=caption_entities, message_thread_id=TOPICS["umumiy"])
+        if _is_thread_not_found(e):
+            log.warning("Thread not found (%s). Sending animation without thread.", thread_id)
+            return await bot.send_animation(chat_id=chat_id, animation=file_id, caption=caption, caption_entities=caption_entities)
         raise
 
-async def safe_send_media_group(app: Application, chat_id: int, thread_id: Optional[int], media):
-    kwargs = {"message_thread_id": thread_id} if thread_id else {}
+async def safe_send_document(bot, chat_id: int, file_id: str, thread_id: Optional[int] = None, caption=None, caption_entities=None):
     try:
-        return await app.bot.send_media_group(chat_id=chat_id, media=media, **kwargs)
+        return await bot.send_document(chat_id=chat_id, document=file_id, caption=caption, caption_entities=caption_entities, **_thread_kwargs(thread_id))
     except BadRequest as e:
-        if "Message thread not found" in str(e):
-            log.warning("Thread not found (%s). Fallback to umumiy.", thread_id)
-            return await app.bot.send_media_group(chat_id=chat_id, media=media, message_thread_id=TOPICS["umumiy"])
+        if _is_thread_not_found(e):
+            log.warning("Thread not found (%s). Sending document without thread.", thread_id)
+            return await bot.send_document(chat_id=chat_id, document=file_id, caption=caption, caption_entities=caption_entities)
         raise
+
+async def safe_send_voice(bot, chat_id: int, file_id: str, thread_id: Optional[int] = None, caption=None, caption_entities=None):
+    try:
+        return await bot.send_voice(chat_id=chat_id, voice=file_id, caption=caption, caption_entities=caption_entities, **_thread_kwargs(thread_id))
+    except BadRequest as e:
+        if _is_thread_not_found(e):
+            log.warning("Thread not found (%s). Sending voice without thread.", thread_id)
+            return await bot.send_voice(chat_id=chat_id, voice=file_id, caption=caption, caption_entities=caption_entities)
+        raise
+
+async def safe_send_audio(bot, chat_id: int, file_id: str, thread_id: Optional[int] = None, caption=None, caption_entities=None):
+    try:
+        return await bot.send_audio(chat_id=chat_id, audio=file_id, caption=caption, caption_entities=caption_entities, **_thread_kwargs(thread_id))
+    except BadRequest as e:
+        if _is_thread_not_found(e):
+            log.warning("Thread not found (%s). Sending audio without thread.", thread_id)
+            return await bot.send_audio(chat_id=chat_id, audio=file_id, caption=caption, caption_entities=caption_entities)
+        raise
+
+async def safe_send_media_group(bot, chat_id: int, media: list, thread_id: Optional[int] = None):
+    try:
+        return await bot.send_media_group(chat_id=chat_id, media=media, **_thread_kwargs(thread_id))
+    except BadRequest as e:
+        if _is_thread_not_found(e):
+            log.warning("Thread not found (%s). Sending media_group without thread.", thread_id)
+            return await bot.send_media_group(chat_id=chat_id, media=media)
+        raise
+
+async def safe_forward_message(bot, chat_id: int, from_chat_id: int, message_id: int, thread_id: Optional[int] = None):
+    try:
+        return await bot.forward_message(chat_id=chat_id, from_chat_id=from_chat_id, message_id=message_id, **_thread_kwargs(thread_id))
+    except BadRequest as e:
+        if _is_thread_not_found(e):
+            log.warning("Thread not found (%s). Forwarding without thread.", thread_id)
+            return await bot.forward_message(chat_id=chat_id, from_chat_id=from_chat_id, message_id=message_id)
+        raise
+
+# ============ FORWARD CREDIT (nickname / id) ============
+def get_forward_credit(msg) -> Optional[str]:
+    """
+    Agar msg forward bo'lsa:
+    - username bo'lsa: @username
+    - bo'lmasa: id:12345
+    - agar umuman aniqlanmasa: None
+    """
+    # PTB v20+: forward_origin
+    fo = getattr(msg, "forward_origin", None)
+    if fo:
+        # forwarded from user
+        su = getattr(fo, "sender_user", None)
+        if su:
+            if getattr(su, "username", None):
+                return f"@{su.username}"
+            return f"id:{su.id}"
+        # forwarded from chat/channel
+        sc = getattr(fo, "sender_chat", None)
+        if sc:
+            if getattr(sc, "username", None):
+                return f"@{sc.username}"
+            title = getattr(sc, "title", None)
+            return title or f"id:{sc.id}"
+        # hidden name (ba'zan)
+        sun = getattr(fo, "sender_user_name", None)
+        if sun:
+            return sun
+
+    # legacy fields
+    ff = getattr(msg, "forward_from", None)
+    if ff:
+        if getattr(ff, "username", None):
+            return f"@{ff.username}"
+        return f"id:{ff.id}"
+
+    fsn = getattr(msg, "forward_sender_name", None)
+    if fsn:
+        return fsn
+
+    fchat = getattr(msg, "forward_from_chat", None)
+    if fchat:
+        if getattr(fchat, "username", None):
+            return f"@{fchat.username}"
+        title = getattr(fchat, "title", None)
+        return title or f"id:{fchat.id}"
+
+    return None
+
+def is_forwarded(msg) -> bool:
+    return bool(getattr(msg, "forward_origin", None) or getattr(msg, "forward_from", None) or getattr(msg, "forward_sender_name", None) or getattr(msg, "forward_from_chat", None))
+
+def append_credit(text: str, msg) -> str:
+    credit = get_forward_credit(msg)
+    if not credit:
+        return text
+    line = f"\n\n👤 Manba: {credit}"
+    # caption limit 1024 bo'lishi mumkin, shuning uchun keyin kesamiz
+    return (text or "") + line
 
 # ============ MEDIA SENDER (single message) ============
 async def send_to_group_with_media(bot, dest_chat_id: int, thread_id: int, msg):
+    # agar forward bo'lib, kimligi ANIQLANMASA -> to'g'ridan-to'g'ri forward qilamiz
+    if is_forwarded(msg) and not get_forward_credit(msg):
+        await safe_forward_message(bot, dest_chat_id, SOURCE_CHAT_ID, msg.message_id, thread_id=thread_id)
+        return
+
     caption = (msg.caption or msg.text or "")
+    caption = append_credit(caption, msg)
     caption = caption[:1024] if caption else None
     entities = msg.caption_entities or msg.entities
 
     if msg.photo:
         file_id = msg.photo[-1].file_id
-        await safe_send_photo(bot, dest_chat_id, thread_id, file_id, caption=caption, caption_entities=entities)
+        await safe_send_photo(bot, dest_chat_id, file_id, thread_id=thread_id, caption=caption, caption_entities=entities)
         return
     if msg.video:
-        await safe_send_video(bot, dest_chat_id, thread_id, msg.video.file_id, caption=caption, caption_entities=entities)
+        await safe_send_video(bot, dest_chat_id, msg.video.file_id, thread_id=thread_id, caption=caption, caption_entities=entities)
         return
     if msg.animation:
-        # animation -> document tarzida yuboramiz (PTB animation sender alohida bor, lekin shunday ham ishlaydi)
-        await safe_send_document(bot, dest_chat_id, thread_id, msg.animation.file_id, caption=caption, caption_entities=entities)
+        await safe_send_animation(bot, dest_chat_id, msg.animation.file_id, thread_id=thread_id, caption=caption, caption_entities=entities)
         return
     if msg.document:
-        await safe_send_document(bot, dest_chat_id, thread_id, msg.document.file_id, caption=caption, caption_entities=entities)
+        await safe_send_document(bot, dest_chat_id, msg.document.file_id, thread_id=thread_id, caption=caption, caption_entities=entities)
         return
     if msg.voice:
-        # voice/audio uchun ham fallback: oddiy document
-        await safe_send_document(bot, dest_chat_id, thread_id, msg.voice.file_id, caption=caption, caption_entities=entities)
+        await safe_send_voice(bot, dest_chat_id, msg.voice.file_id, thread_id=thread_id, caption=caption, caption_entities=entities)
         return
     if msg.audio:
-        await safe_send_document(bot, dest_chat_id, thread_id, msg.audio.file_id, caption=caption, caption_entities=entities)
+        await safe_send_audio(bot, dest_chat_id, msg.audio.file_id, thread_id=thread_id, caption=caption, caption_entities=entities)
         return
 
     text = (msg.text or msg.caption or "").strip()
+    text = append_credit(text, msg)
     if text:
-        await safe_send_message(bot, dest_chat_id, thread_id, text[:4096], entities=msg.entities)
+        await safe_send_message(bot, dest_chat_id, text[:4096], thread_id=thread_id, entities=msg.entities)
 
 # ============ ALBUM (media_group) BUFFER ============
 ALBUMS: Dict[str, Dict] = {}  # key -> {"msgs":[...], "task": asyncio.Task}
@@ -289,7 +367,6 @@ def album_key(msg) -> Optional[str]:
     return f"{msg.chat_id}:{mgid}"
 
 def can_make_media_group(msgs) -> bool:
-    # Telegram media_group: faqat photo/video
     for m in msgs:
         if not (m.photo or m.video):
             return False
@@ -308,9 +385,16 @@ async def flush_album(app: Application, key: str, delay_sec: float = 1.2):
     topic_key = guess_topic_key(text)
     thread_id = topic_thread_id(topic_key)
 
+    # agar album forward bo'lib, kimligi ANIQLANMASA -> albumni bittalab forward qilib yuboramiz
+    if is_forwarded(first) and not get_forward_credit(first):
+        for m in msgs:
+            await safe_forward_message(app.bot, DEST_CHAT_ID, SOURCE_CHAT_ID, m.message_id, thread_id=thread_id)
+        return
+
     if can_make_media_group(msgs):
         media = []
         cap = (first.caption or "").strip()
+        cap = append_credit(cap, first)
         cap = cap[:1024] if cap else None
         cap_entities = first.caption_entities
 
@@ -329,7 +413,7 @@ async def flush_album(app: Application, key: str, delay_sec: float = 1.2):
                     media.append(InputMediaVideo(media=file_id, supports_streaming=True))
 
         try:
-            await safe_send_media_group(app, DEST_CHAT_ID, thread_id, media)
+            await safe_send_media_group(app.bot, DEST_CHAT_ID, media, thread_id=thread_id)
             return
         except Exception as e:
             log.warning("send_media_group failed, fallback to singles: %s", e)
@@ -377,7 +461,7 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "adm:set_default":
         await q.answer("OK")
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🧩 Umumiy", callback_data="def:umumiy"), InlineKeyboardButton("🏠 Uy", callback_data="def:uy")],
+            [InlineKeyboardButton("💬 Umumiy", callback_data="def:umumiy"), InlineKeyboardButton("🏠 Uy", callback_data="def:uy")],
             [InlineKeyboardButton("💼 Ish", callback_data="def:ish"), InlineKeyboardButton("🚖 Taksi", callback_data="def:taksi")],
             [InlineKeyboardButton("🛂 Visa", callback_data="def:visa"), InlineKeyboardButton("🛒 Bozor", callback_data="def:bozor")],
             [InlineKeyboardButton("🕌 Ziyorat", callback_data="def:ziyorat"), InlineKeyboardButton("🩺 Salomatlik", callback_data="def:salomatlik")],
@@ -400,7 +484,7 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kw = STATE.get("keywords", {})
         lines = []
         for k, words in kw.items():
-            lines.append(f"{TOPIC_LABELS_UZ.get(k,k)}: {', '.join(words[:25])}{'…' if len(words)>25 else ''}")
+            lines.append(f"{TOPIC_LABELS_UZ.get(k,k)}: {', '.join(words[:20])}{'…' if len(words)>20 else ''}")
         text = "🧠 Keywords:\n\n" + "\n".join(lines)
         await q.answer("OK")
         await q.message.reply_text(text[:4096])
@@ -421,7 +505,6 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
-    # Manual post tanlash: pick:<channel_msg_id>:<topic_key>
     if data.startswith("pick:"):
         parts = data.split(":")
         if len(parts) != 3:
@@ -447,17 +530,12 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 async def on_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Source kanal postlarini ushlaydi va guruhga bo‘limlab yuboradi.
-    Album bo‘lsa: 1 ta media_group qilib yuboradi.
-    """
     msg = update.channel_post
     if not msg:
         return
     if msg.chat_id != SOURCE_CHAT_ID:
         return
 
-    # ===== album buffer =====
     key = album_key(msg)
     if key:
         pack = ALBUMS.get(key)
@@ -468,7 +546,6 @@ async def on_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pack["msgs"].append(msg)
         return
 
-    # ===== oddiy post =====
     text = (msg.text or msg.caption or "").strip()
     mode = STATE.get("mode", "auto")
 
@@ -482,7 +559,7 @@ async def on_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
             preview += (text[:500] + ("…" if len(text) > 500 else "")) if text else "(Matn yo‘q, media post)"
 
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🧩 Umumiy", callback_data=f"pick:{msg.message_id}:umumiy"),
+                [InlineKeyboardButton("💬 Umumiy", callback_data=f"pick:{msg.message_id}:umumiy"),
                  InlineKeyboardButton("🏠 Uy", callback_data=f"pick:{msg.message_id}:uy")],
                 [InlineKeyboardButton("💼 Ish", callback_data=f"pick:{msg.message_id}:ish"),
                  InlineKeyboardButton("🚖 Taksi", callback_data=f"pick:{msg.message_id}:taksi")],
@@ -518,7 +595,6 @@ def main():
     app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CallbackQueryHandler(admin_cb, pattern=r"^(adm:|def:|pick:)"))
 
-    # source channel postlari
     app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST, on_channel_post))
 
     log.info("✅ Channel-to-group bot ishga tushdi. Mode=%s | Default=%s", STATE.get("mode"), STATE.get("default_topic"))
