@@ -66,6 +66,20 @@ TOPIC_LABELS_UZ = {
     "elon": "📣 E’lon",
 }
 
+# ✅ BO‘LIMLAR LINKLARI (TO‘G‘RILANDI) — KOD ICHIDA
+TOPIC_LINKS_TEXT = (
+    "🚕 Transport & Taksi — https://t.me/saudia0dan_group/199\n"
+    "💬 Umumiy — savollar — https://t.me/saudia0dan_group/1\n"
+    "🛒 Bozor & Narxlar — https://t.me/saudia0dan_group/201\n"
+    "🏠 Uy-joy & Ijara — https://t.me/saudia0dan_group/197\n"
+    "🌿 Ali Attar — https://t.me/saudia0dan_group/20\n"
+    "🕋 Ziyorat & Umra — https://t.me/saudia0dan_group/202\n"
+    "🩺 Salomatlik — https://t.me/saudia0dan_group/203\n"
+    "🛂 Hujjatlar & Visa — https://t.me/saudia0dan_group/200\n"
+    "💼 Ish & Daromad — https://t.me/saudia0dan_group/198\n"
+    "📢 E’lonlar (Admin only) — https://t.me/saudia0dan_group/12"
+)
+
 # ============ KEYWORDS -> TOPIC ============
 DEFAULT_KEYWORDS: Dict[str, List[str]] = {
     "uy": ["ijara", "kvartira", "uy", "xonadon", "room", "arenda", "ijaraga", "mehmanxona"],
